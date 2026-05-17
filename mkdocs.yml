@@ -77,6 +77,10 @@ nav:
       - "Lab 10：API 契约与幂等": labs/10-drf-api-auth-permissions.md
       - "Lab 11：缓存与文件上传": labs/11-cache-session-files.md
       - "Lab 12：测试矩阵": labs/12-testing-strategy.md
+      - "Lab 13：MySQL 查询计划与锁证据": labs/13-mysql-innodb-production.md
+      - "Lab 14：Redis 缓存边界": labs/14-redis-cache-boundaries.md
+      - "Lab 15：Redis Stream 事件流": labs/15-redis-stream-event-flow.md
+      - "Lab 16：MongoDB 读模型": labs/16-mongodb-document-aggregation.md
   - 综合项目:
       - Production Order Workflow: projects/production-order-workflow.md
   - 参考资料:
