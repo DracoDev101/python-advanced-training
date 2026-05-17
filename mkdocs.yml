@@ -81,6 +81,12 @@ nav:
       - "Lab 14：Redis 缓存边界": labs/14-redis-cache-boundaries.md
       - "Lab 15：Redis Stream 事件流": labs/15-redis-stream-event-flow.md
       - "Lab 16：MongoDB 读模型": labs/16-mongodb-document-aggregation.md
+      - "Lab 17：Celery 架构": labs/17-celery-architecture-worker-lifecycle.md
+      - "Lab 18：Celery 可靠性": labs/18-celery-reliability-patterns.md
+      - "Lab 19：Outbox 工作流": labs/19-outbox-workflow-compensation.md
+      - "Lab 20：Celery 排障": labs/20-celery-observability-debugging.md
+      - "Lab 21：Kafka Consumer": labs/21-kafka-event-system-python-consumer.md
+      - "Lab 22：Kafka Outbox/CDC": labs/22-kafka-outbox-cdc-idempotency.md
   - 综合项目:
       - Production Order Workflow: projects/production-order-workflow.md
   - 参考资料:
