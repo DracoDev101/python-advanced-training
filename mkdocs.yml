@@ -65,6 +65,10 @@ nav:
       - "Lesson 30：综合项目 Review 与生产演练": lessons/30-final-project-review.md
   - 实验:
       - 实验说明: labs/index.md
+      - "Lab 1：运行时地图与慢请求拆解": labs/01-runtime-map.md
+      - "Lab 2：对象模型与内存证据": labs/02-object-model-memory.md
+      - "Lab 3：类型契约与异步事件": labs/03-typing-contracts.md
+      - "Lab 4：import 与启动链路": labs/04-import-settings-startup.md
   - 综合项目:
       - Production Order Workflow: projects/production-order-workflow.md
   - 参考资料:
