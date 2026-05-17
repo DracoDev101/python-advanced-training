@@ -2,35 +2,32 @@
 
 ## 学习目标
 
-完成本课后，你应该能够：
-
-- 解释 DB 与 broker/Kafka/Redis Stream 双写问题。
-- 设计 transactional outbox 表、publisher、reconciliation job。
-- 判断 Celery chain/group/chord 的失败语义，不把它误当业务事务。
-- 用 saga/compensation 设计跨系统工作流。
+- 理解 DB 与消息系统双写问题，以及为什么 `transaction.on_commit()` 不是完整 outbox。
+- 设计 outbox 表、publisher、幂等 consumer、reconciliation job。
+- 理解 Celery chain/group/chord 的失败语义与业务补偿边界。
+- 用状态机和 Saga 思维设计订单工作流。
 
 ## 关键问题
 
-1. DB commit 成功但 Celery/Kafka publish 失败怎么办？
-2. publish 成功但 outbox 标记 published 失败怎么办？
-3. chain 第 3 步失败，前 2 步的 side effect 如何处理？
-4. 补偿是 rollback 吗？什么时候补偿也可能失败？
+1. DB commit 成功但 Kafka/Celery publish 失败怎么办？
+2. outbox publisher 重复发布是否允许？前提是什么？
+3. chain/group/chord 中某一步失败，已经完成的副作用如何补偿？
+4. 如何发现 pending outbox 卡住？
 
 ## 核心结论
 
-Outbox 解决的是“业务状态变化”和“待发布事件记录”在同一数据库事务里原子提交。它不保证消息只发布一次，所以 consumer 必须幂等。
+Outbox 把“业务状态变化”和“待发布事件”放进同一个 DB 事务：
 
 ```text
-business transaction
-  write order/payment/inventory
-  write outbox_event(status=pending)
+transaction.atomic:
+  write business rows
+  write outbox row
 commit
-publisher scans pending
-  publish to Celery/Kafka/Redis Stream
-  mark published
-consumer idempotently applies side effect
-reconciler repairs stuck states
+publisher repeatedly publishes pending outbox
+consumer handles events idempotently
 ```
+
+它把不可控的跨系统双写，变成可恢复、可扫描、可重放的本地状态。
 
 ## 1. 双写问题
 
@@ -39,169 +36,191 @@ reconciler repairs stuck states
 ```python
 with transaction.atomic():
     order = Order.objects.create(...)
-    kafka.produce("order-events", payload)
+    kafka.produce("order-events", event)
 ```
 
 失败窗口：
 
 | 窗口 | 结果 |
 |---|---|
-| DB 写成功，Kafka 失败 | 业务状态已变，但没有事件 |
-| Kafka 成功，DB rollback | 下游收到不存在/未提交事件 |
-| publish 成功，进程 crash | 无法知道是否要重发 |
+| DB 写成功，Kafka 失败 | 业务有订单，无事件 |
+| Kafka 成功，DB 回滚 | 有幽灵事件 |
+| Kafka 成功但响应超时 | 应用不知道是否发布成功 |
 
-## 2. Outbox 表
+`transaction.on_commit(lambda: publish())` 避免了 DB 回滚后发布，但仍有 commit 成功后 publish 失败的窗口。
+
+## 2. Outbox 表设计
 
 ```python
 class OutboxEvent(models.Model):
     event_id = models.CharField(max_length=128, unique=True)
     aggregate_type = models.CharField(max_length=64)
     aggregate_id = models.CharField(max_length=128)
+    aggregate_version = models.BigIntegerField()
     event_type = models.CharField(max_length=128)
-    schema_version = models.IntegerField(default=1)
     payload = models.JSONField()
     status = models.CharField(max_length=32, default="pending")
     attempts = models.IntegerField(default=0)
     next_attempt_at = models.DateTimeField(null=True)
     published_at = models.DateTimeField(null=True)
-    last_error = models.TextField(blank=True)
+    last_error = models.TextField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         indexes = [
             models.Index(fields=["status", "next_attempt_at", "id"]),
-            models.Index(fields=["aggregate_type", "aggregate_id", "id"]),
+            models.Index(fields=["aggregate_type", "aggregate_id", "aggregate_version"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=["aggregate_type", "aggregate_id", "aggregate_version"], name="uniq_outbox_aggregate_version"),
         ]
 ```
 
-## 3. Publisher 并发抢占
+`aggregate_version` 支持同一聚合内顺序和幂等。
+
+## 3. Publisher 抢占与并发
 
 ```python
 with transaction.atomic():
-    events = list(
+    rows = (
         OutboxEvent.objects
         .select_for_update(skip_locked=True)
         .filter(status="pending", next_attempt_at__lte=now())
         .order_by("id")[:100]
     )
-    for event in events:
-        event.status = "publishing"
-        event.save(update_fields=["status"])
+    events = list(rows)
 ```
 
-`skip_locked` 适合多个 publisher 并发抢 pending event，避免互相等待。
+`skip_locked=True` 让多个 publisher 并发处理不同 outbox row。
 
-发布后：
+发布后更新：
 
 ```python
 try:
-    producer.publish(event)
+    broker_publish(event)
 except Exception as exc:
-    mark_retry(event, exc)
+    event.attempts += 1
+    event.next_attempt_at = backoff(event.attempts)
+    event.last_error = repr(exc)
+    event.save(update_fields=["attempts", "next_attempt_at", "last_error"])
 else:
-    mark_published(event)
+    event.status = "published"
+    event.published_at = timezone.now()
+    event.save(update_fields=["status", "published_at"])
 ```
 
-窗口：publish 成功但 mark_published 失败。解决：允许重发，consumer 幂等。
+仍可能 `broker_publish` 成功但 DB update 失败，所以 consumer 必须幂等。
 
-## 4. Reconciliation job
+## 4. Consumer 幂等与乱序
 
-必须定期扫异常状态：
+```python
+class ProcessedEvent(models.Model):
+    event_id = models.CharField(max_length=128, unique=True)
+    consumer = models.CharField(max_length=128)
+```
+
+处理：
+
+```python
+with transaction.atomic():
+    ProcessedEvent.objects.create(event_id=event_id, consumer="order-read-model")
+    apply_event(event)
+```
+
+如果有聚合版本：
 
 ```text
-pending 太久
-publishing 太久
-attempts 超限
-published 但下游未处理
+expected next version = current_version + 1
+if event_version <= current_version: duplicate/old, ack
+if event_version > current_version + 1: gap, park/retry
 ```
 
-指标：
+## 5. Celery chain/group/chord 的边界
+
+```python
+chain(
+    reserve_inventory.s(order_id),
+    capture_payment.s(),
+    send_confirmation.s(),
+)()
+```
+
+问题：如果 capture 成功后 send 失败，Celery 不知道业务该如何补偿。
+
+因此复杂业务不要只依赖 chain 表达一致性，应该有显式状态机：
+
+```text
+pending → inventory_reserved → payment_captured → confirmed
+                 ↘ reserve_failed
+                         ↘ compensation_required
+```
+
+每个 transition 是幂等的，并有补偿动作。
+
+## 6. Saga / Compensation
+
+示例：
+
+```text
+1. reserve inventory
+2. capture payment
+3. create shipment
+```
+
+如果 3 失败，补偿：
+
+```text
+void/refund payment
+release inventory
+mark order failed
+```
+
+补偿不是回滚。外部系统副作用已经发生，只能发起相反业务动作。
+
+## 7. Reconciliation job
+
+定时扫描异常状态：
+
+```text
+outbox pending age > 5m
+payment captured but order not paid
+inventory reserved but order cancelled
+event published but read model missing
+```
+
+这是生产系统自愈能力的核心。
+
+## 8. 指标
 
 ```text
 outbox_pending_count
-outbox_oldest_pending_age
-outbox_publish_failure_total
-outbox_republish_total
-outbox_stuck_publishing_count
+outbox_oldest_pending_age_seconds
+outbox_publish_attempts_total
+outbox_publish_failures_total
+consumer_duplicate_total
+consumer_gap_total
+compensation_required_total
 ```
 
-## 5. Celery canvas 不是事务
-
-```python
-chain(reserve_inventory.s(order_id), capture_payment.s(), send_email.s())()
-```
-
-如果 `send_email` 失败，前面的库存预留和支付捕获不会自动 rollback。
-
-业务工作流应由状态机驱动：
+## 9. Runbook：outbox 堆积
 
 ```text
-order.pending
-→ inventory_reserved
-→ payment_captured
-→ notification_sent
-→ completed
+1. 查询 pending 数量和 oldest age
+2. 看 publisher worker 是否在线
+3. 看 last_error top N
+4. 判断 broker/Kafka/Redis 是否故障
+5. 扩 publisher 或暂停非关键事件
+6. 对 poison event 标记 failed/manual_review
+7. 验证 pending age 下降、consumer lag 恢复
 ```
-
-每一步 task 读取当前状态，幂等推进到下一状态。
-
-## 6. Saga 与补偿
-
-补偿不是数据库 rollback，而是新的业务动作：
-
-```text
-capture payment 成功，但 reserve shipment 失败
-→ refund payment
-→ mark order failed_compensated
-```
-
-补偿也会失败，所以要有：
-
-- compensation task。
-- compensation status。
-- retry/backoff。
-- 人工处理队列。
-
-## 7. Runbook：Outbox 堵塞
-
-```text
-症状：订单状态已更新，但下游 read model/通知延迟
-
-1. 查询 outbox
-   pending count, oldest age, attempts, last_error
-2. 查 publisher worker
-   active/reserved/runtime/error
-3. 查 broker/Kafka/Redis Stream
-   publish latency/error
-4. 判断
-   - publisher 停了？
-   - poison event schema？
-   - 下游 broker 不可用？
-   - stuck publishing？
-5. 修复
-   - 重启 publisher
-   - stuck publishing → pending
-   - poison → DLQ/manual
-   - 修 schema/consumer
-6. 验证
-   oldest pending age 下降
-```
-
-## 常见误区
-
-- `transaction.on_commit(lambda: task.delay())` 就等于 outbox。
-- 认为 outbox 保证 exactly-once。
-- chain/group/chord 当分布式事务。
-- 没有 reconciliation job。
-- 补偿流程没有人工出口。
 
 ## 作业
 
-为订单支付工作流设计 outbox + saga：订单创建、库存预留、支付捕获、通知、失败补偿。写出状态机、outbox schema、publisher、consumer 幂等、reconciliation、人工处理字段。
+为 `order.paid` 设计 outbox：表结构、publisher 抢占、Kafka/Redis Stream 发布、consumer 幂等、补偿流程、reconciliation job 和指标。
 
 ## 评估标准
 
-- 能解释双写失败窗口。
-- 能设计 outbox 表和 publisher 并发抢占。
-- 能说明为什么 consumer 必须幂等。
-- 能设计补偿状态机和 reconciliation job。
+- 能解释双写问题所有失败窗口。
+- 能设计 outbox 表和 publisher。
+- 能说明重复发布为什么可接受。
+- 能设计显式状态机和补偿流程。

@@ -196,3 +196,71 @@ then scale consumers/partitions
 - 能设计 idempotent consumer。
 - 能设计 retry topic/DLQ/replay。
 - 能处理乱序、重复和 backpressure。
+
+
+## 深入补充：生产实现要点
+
+### Kafka message key 与顺序
+
+同一订单事件必须使用稳定 key：
+
+```python
+key = f"order:{order_id}".encode()
+producer.produce("order-events", key=key, value=payload)
+```
+
+这样同一订单进入同一 partition，才能获得 partition 内顺序。跨订单不要假设全局有序。
+
+### 手动 commit offset
+
+consumer 不应在 poll 后立刻 commit。应该：
+
+```text
+poll batch
+→ validate schema
+→ process each message idempotently
+→ flush DB transaction
+→ commit offsets
+```
+
+如果先 commit 后处理，worker crash 会丢消息；如果处理成功但 commit 失败，会重复处理，所以 consumer 必须幂等。
+
+### Rebalance 风险
+
+rebalance 时 partition ownership 改变。consumer 必须处理：
+
+- revoke 前提交已处理 offset。
+- assign 后从 committed offset 继续。
+- 长时间处理导致 `max.poll.interval.ms` 超时而被踢出 group。
+
+### Lag 解释
+
+```text
+lag = log end offset - committed offset
+```
+
+lag 高不一定是 consumer 代码慢，也可能是：
+
+- partition 热点。
+- 下游 DB 慢。
+- poison message 卡住 batch。
+- rebalance 频繁。
+- producer 突增。
+
+### DLQ 字段
+
+```json
+{
+  "original_topic": "order-events",
+  "partition": 3,
+  "offset": 9123,
+  "event_id": "evt_1",
+  "key": "order:123",
+  "error_type": "SchemaValidationError",
+  "error_message": "missing field aggregate_id",
+  "failed_at": "2026-05-17T12:00:00Z",
+  "payload": {...}
+}
+```
+
+DLQ 不是垃圾桶。必须有 owner、告警、重放工具和过期策略。

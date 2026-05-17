@@ -4,283 +4,263 @@
 
 完成本课后，你应该能够：
 
-- 为 Celery task 设计业务幂等键，而不是依赖 Celery task id。
-- 区分可重试错误、不可重试错误、poison message、人工补偿。
-- 正确使用 retry/backoff/jitter、soft/hard time limit、rate limit、queue routing。
-- 解释 retry storm、重复副作用、外部 API 超时、worker kill 后重投等生产事故链路。
+- 解释 Celery task 为什么必须按 at-least-once 语义设计。
+- 为外部 API、邮件、库存、读模型更新等不同任务设计幂等策略。
+- 正确配置 retry/backoff/jitter、soft/hard time limit、rate limit、queue routing。
+- 识别 retry storm、poison message、重复副作用、worker lost 等生产故障。
 
 ## 关键问题
 
-1. task 执行到一半 worker OOM，任务会不会重跑？重跑是否安全？
-2. `self.retry()` 什么时候是修复，什么时候是事故放大器？
-3. soft time limit 和 hard time limit 分别保护什么？
-4. 发送邮件、扣款、发 Kafka event、更新 Mongo read model，幂等策略一样吗？
+1. task 重试后会不会重复扣款、重复发邮件、重复写 read model？
+2. `self.retry()` 和抛异常有什么区别？
+3. soft time limit 与 hard time limit 分别解决什么问题？
+4. 限流应该放在 Celery、应用、Redis，还是外部 API client？
 
 ## 核心结论
 
-Celery 可靠性不是 `autoretry_for=(Exception,)`。可靠 task 至少需要：
+Celery 可靠性不是“打开 autoretry”。可靠 task 必须同时满足：
 
 ```text
-业务幂等键
-+ 状态机/唯一约束
-+ 可分类异常
-+ 有限 retry + backoff + jitter
-+ time limit
-+ 队列隔离
-+ DLQ/补偿
-+ 可观测字段
+stable payload
++ business idempotency key
++ bounded retry/backoff/jitter
++ timeout budget
++ queue isolation
++ poison message escape hatch
++ observable attempts and failure reasons
 ```
 
-Celery 的投递语义通常应按 at-least-once 设计：任务可能执行 0 次、1 次或多次；你的业务必须能识别和处理重复。
+默认假设：任务可能执行 0 次、1 次或多次；worker 可能在任意点崩溃；broker 可能重投；外部 API 可能成功但响应超时。
 
-## 1. 技术 ID 与业务幂等 ID
+## 1. 幂等：以业务结果为中心
 
-Celery task id：
+技术 task id 不是业务幂等 id。业务幂等要使用稳定业务键：
 
 ```text
-4b8d... task message 的技术 ID
+send email: notification_id / template + recipient + business event_id
+payment capture: payment_intent_id / provider idempotency key
+read model update: event_id + aggregate_version
+inventory reservation: order_id + sku unique constraint
+webhook delivery: endpoint_id + event_id
 ```
 
-业务幂等 ID：
-
-```text
-event_id=evt_123
-payment_id=pay_123
-idempotency_key=user42:create_order:abc
-```
-
-不要用 task id 作为业务幂等键。原因：
-
-- 同一业务事件可能因为 outbox 重发而产生不同 task id。
-- 手工补偿/重放时 task id 会变。
-- Kafka/Redis Stream/Celery 三套系统需要同一个业务 event_id 串联。
-
-## 2. 幂等表模式
+示例：邮件发送去重：
 
 ```python
-class ProcessedTask(models.Model):
-    idempotency_key = models.CharField(max_length=160, unique=True)
+class NotificationDelivery(models.Model):
+    notification_id = models.CharField(max_length=128, unique=True)
+    recipient = models.EmailField()
     status = models.CharField(max_length=32)
-    result = models.JSONField(null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    provider_message_id = models.CharField(max_length=128, null=True)
 ```
 
 Task：
 
 ```python
-@app.task(bind=True, acks_late=True, reject_on_worker_lost=True)
-def send_order_email(self, payload: dict):
-    key = f"send_email:{payload['event_id']}"
-    try:
-        with transaction.atomic():
-            ProcessedTask.objects.create(idempotency_key=key, status="started")
-    except IntegrityError:
-        logger.info("task_duplicate_ignored", extra={"idempotency_key": key})
+@app.task(bind=True, acks_late=True)
+def send_notification(self, notification_id: str):
+    delivery = NotificationDelivery.objects.select_for_update().get(
+        notification_id=notification_id
+    )
+    if delivery.status == "sent":
         return
-
-    provider_message_id = email_client.send(
-        to=payload["email"],
-        template="order_created",
-        idempotency_key=key,
-    )
-
-    ProcessedTask.objects.filter(idempotency_key=key).update(
-        status="succeeded",
-        result={"provider_message_id": provider_message_id},
-    )
+    provider_id = email_client.send(..., idempotency_key=notification_id)
+    delivery.status = "sent"
+    delivery.provider_message_id = provider_id
+    delivery.save(update_fields=["status", "provider_message_id"])
 ```
 
-边界：如果 task 在 `ProcessedTask.create` 后、外部邮件发送前 crash，再次执行会被当重复跳过，导致邮件没发。这说明单表 started 幂等还不够。更好的状态机：
+即使 task 重跑，也不会重复产生业务效果。
 
-```text
-pending → sending → sent
-             ↘ failed_retryable
-             ↘ failed_terminal
-```
+## 2. Retry：只重试可恢复错误
 
-重复执行时根据状态决定是否继续，而不是简单忽略。
+不要对所有异常重试。
 
-## 3. 外部 API 幂等
+可重试：
 
-支付/邮件/第三方 API 必须携带 provider 支持的 idempotency key：
+- 网络超时。
+- 连接失败。
+- 429 / rate limited。
+- 部分 5xx。
+- deadlock / lock wait timeout（有限重试）。
 
-```python
-payment_client.capture(
-    payment_id=payment_id,
-    amount_cents=amount,
-    headers={"Idempotency-Key": f"capture:{payment_id}"},
-    timeout=(2, 10),
-)
-```
+不可重试：
 
-如果 provider 不支持幂等：
+- payload schema 错误。
+- 权限/认证失败。
+- 业务状态非法。
+- 404 永久不存在。
 
-- 尽量避免自动 retry。
-- 先查询 provider 状态再决定补偿。
-- 保留 reconciliation job。
-- 需要人工审核队列。
-
-## 4. 异常分类
-
-```python
-class RetryableDependencyError(Exception): ...
-class TerminalBusinessError(Exception): ...
-class PoisonMessageError(Exception): ...
-```
-
-策略：
-
-| 错误 | 例子 | 动作 |
-|---|---|---|
-| retryable | HTTP 502、连接超时、DB deadlock | retry + backoff |
-| terminal | 邮箱格式非法、订单不存在且确认不可恢复 | 标记失败，ack |
-| poison | payload schema 错、代码 bug 反复失败 | DLQ/人工处理 |
-| unknown | 未分类异常 | 少量 retry 后 DLQ |
-
-不要 `autoretry_for=(Exception,)` 无脑重试所有异常。
-
-## 5. Retry/backoff/jitter
+配置：
 
 ```python
 @app.task(
     bind=True,
-    autoretry_for=(RetryableDependencyError,),
+    autoretry_for=(TransientGatewayError,),
     retry_backoff=True,
     retry_backoff_max=300,
     retry_jitter=True,
-    max_retries=5,
+    max_retries=8,
+    acks_late=True,
 )
-def publish_event(self, event_id: str):
+def capture_payment(self, payment_id: str):
     ...
 ```
 
-为什么需要 jitter：避免大量任务同一秒重试，造成 retry storm。
+手动 retry 可以记录更细证据：
 
-重试日志：
-
-```json
-{
-  "event": "celery_task_retry",
-  "task_name": "orders.publish_event",
-  "task_id": "...",
-  "event_id": "evt_1",
-  "retry": 3,
-  "countdown_s": 42,
-  "exception_type": "BrokerTimeout"
-}
+```python
+try:
+    call_provider()
+except ProviderRateLimited as exc:
+    logger.warning("payment_retry", extra={"payment_id": payment_id, "reason": "rate_limited", "retries": self.request.retries})
+    raise self.retry(exc=exc, countdown=min(300, 2 ** self.request.retries))
 ```
 
-## 6. Soft/Hard time limit
+## 3. Retry storm
+
+事故模式：下游 API 挂了，所有 task 同时 retry，指数放大队列。
+
+证据：
+
+```text
+task_retry_total 激增
+queue_depth 上升
+external_api_error_rate 上升
+同一 provider 的 attempt 分布集中
+```
+
+缓解：
+
+- jitter。
+- provider 级 circuit breaker。
+- queue 限流。
+- 暂停非关键队列。
+- DLQ/延迟重试队列。
+- 全局最大尝试次数。
+
+## 4. Time limit
 
 ```python
 task_soft_time_limit = 240
 task_time_limit = 300
 ```
 
-- soft：抛 `SoftTimeLimitExceeded`，给 task 清理/标记状态机会。
-- hard：强杀 worker 子进程，可能没有 finally。
-
-处理：
+soft limit 抛 `SoftTimeLimitExceeded`，task 可清理资源：
 
 ```python
 from celery.exceptions import SoftTimeLimitExceeded
 
-@app.task(bind=True)
-def generate_report(self, report_id: int):
+@app.task(bind=True, soft_time_limit=240, time_limit=300)
+def generate_report(self, report_id: str):
     try:
-        do_work(report_id)
+        render_pdf(report_id)
     except SoftTimeLimitExceeded:
         mark_report_failed(report_id, reason="soft_timeout")
         raise
 ```
 
-不要在 hard kill 后指望 finally 执行。
+hard limit 会杀 worker 子进程，不能依赖 finally 执行。
 
-## 7. Rate limit 与队列隔离
+原则：
+
+- 外部 API timeout 必须小于 task soft time limit。
+- task soft time limit 必须小于 hard time limit。
+- worker termination grace period 必须大于正常任务完成时间，或任务可恢复。
+
+## 5. Rate limit 与队列隔离
+
+Celery rate limit：
 
 ```python
-@app.task(rate_limit="10/m")
-def call_payment_gateway(...): ...
+@app.task(rate_limit="100/m")
+def call_partner_api(...):
+    ...
 ```
 
-Celery rate limit 是 worker 侧限制，不是全局强一致限流。多 worker/多队列下需要额外网关或 Redis 限流。
+但 provider 级限流常需要 Redis token bucket，因为多个 worker/服务实例共享配额。
 
 队列隔离：
 
-```text
-payment: 低并发、严格超时
-email: 中并发、可延迟
-read_model: 可扩容、幂等
-heavy: 长任务，独立 worker
+```python
+task_routes = {
+    "payments.tasks.capture_payment": {"queue": "critical"},
+    "notifications.tasks.send_email": {"queue": "email"},
+    "reports.tasks.generate_pdf": {"queue": "heavy"},
+}
 ```
 
-## 8. Poison message 与 DLQ
+避免 PDF 生成压垮支付确认。
 
-Celery 没有像 Kafka 那样天然 DLQ。可用业务表记录：
+## 6. Poison message
+
+poison message 是永远处理不了的消息：schema 错误、业务状态不可能、第三方永久拒绝。
+
+策略：
+
+```text
+attempts <= N: retry with backoff
+attempts > N: write failed state / DLQ / human review
+```
+
+Celery 中可记录失败表：
 
 ```python
 class FailedTask(models.Model):
-    task_name = models.CharField(max_length=200)
-    idempotency_key = models.CharField(max_length=200)
+    task_id = models.CharField(max_length=128)
+    task_name = models.CharField(max_length=255)
+    business_key = models.CharField(max_length=255)
+    reason = models.TextField()
     payload = models.JSONField()
-    error_type = models.CharField(max_length=100)
-    error_message = models.TextField()
-    attempts = models.IntegerField()
-    status = models.CharField(max_length=32, default="open")
+    created_at = models.DateTimeField(auto_now_add=True)
 ```
 
-超过 retry 上限：
+## 7. 生产日志字段
+
+```json
+{
+  "event": "celery_task_retry",
+  "task_id": "uuid",
+  "task_name": "payments.tasks.capture_payment",
+  "queue": "critical",
+  "business_key": "payment:123",
+  "request_id": "req_1",
+  "event_id": "evt_1",
+  "attempt": 3,
+  "max_retries": 8,
+  "next_countdown_s": 16,
+  "error_type": "ProviderTimeout"
+}
+```
+
+## 8. Runbook：重复副作用
 
 ```text
-write failed_tasks
-ack original task
-alert human/channel
-provide replay command
+症状：用户收到两封邮件 / 支付重复 capture
+1. 查业务键
+   notification_id / payment_id / event_id
+2. 查 task 证据
+   task_id、retries、worker、时间线
+3. 查幂等记录
+   unique constraint 是否存在
+   provider idempotency key 是否传递
+4. 判断
+   task 重跑？provider timeout 后其实成功？consumer replay？
+5. 修复
+   增加唯一约束/幂等表
+   修正 ack/retry 策略
+   对已重复副作用做补偿
+6. 验证
+   重放同一 event/task 不产生第二次副作用
 ```
-
-## 9. Runbook：Retry storm
-
-```text
-症状：Celery retry_total 暴涨，下游 API 5xx，队列 oldest age 上升
-
-1. 证据
-   - task_retry_total by task_name/exception_type
-   - queue_depth / oldest_message_age
-   - downstream status_code/latency
-2. 判断
-   - 是否所有任务同一 countdown？
-   - 是否无 jitter？
-   - 是否 retry 不可重试错误？
-3. 止血
-   - 暂停对应队列 worker
-   - 降低 rate limit / 熔断外部调用
-   - 把 poison payload 标记 DLQ
-4. 修复
-   - 异常分类
-   - backoff+jitter
-   - max_retries
-   - provider idempotency key
-5. 验证
-   - retry rate 下降
-   - downstream error 下降
-   - oldest age 下降
-```
-
-## 10. 常见误区
-
-- 用 task id 做业务幂等。
-- 在 task 里持有完整 ORM model payload。
-- 事务内 `.delay()`，worker 早于 commit 执行。
-- 无限制 retry 外部 API。
-- 所有任务共用 default 队列。
 
 ## 作业
 
-为支付确认后的 `capture_payment`、`send_email`、`update_read_model` 三类 task 分别设计：幂等键、异常分类、retry、time limit、queue、DLQ、日志字段。
+为支付 capture、邮件发送、Mongo read model 更新分别设计 Celery 幂等方案，列出业务键、唯一约束、retry 策略、time limit、日志字段和失败补偿。
 
 ## 评估标准
 
-- 能设计业务幂等键和状态机。
-- 能区分 retryable/terminal/poison。
-- 能说明 soft/hard time limit 的不同。
-- 能写出 retry storm runbook。
+- 能区分技术 task id 和业务幂等 id。
+- 能判断哪些错误可重试。
+- 能配置 backoff/jitter/time limit/rate limit。
+- 能设计 poison message 的退出路径。
