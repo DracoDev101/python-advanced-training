@@ -1,4 +1,4 @@
-# Lesson 18：Gunicorn 进程模型与 Worker 选择
+# Lesson 29：Observability、部署与 Runbook
 
 ## 学习目标
 
@@ -29,4 +29,4 @@ python manage.py check --deploy
 
 ## 故障证据
 
-待补充：日志、SQL、profile、queue metrics 或 server worker 状态。
+待补充：日志、SQL、profile、queue metrics、consumer lag 或 server worker 状态。

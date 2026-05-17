@@ -45,18 +45,24 @@ nav:
       - "Lesson 10：DRF/API 设计、认证与权限": lessons/10-drf-api-auth-permissions.md
       - "Lesson 11：缓存、Session、文件与外部资源": lessons/11-cache-session-files.md
       - "Lesson 12：测试体系、factory、fixtures 与契约测试": lessons/12-testing-strategy.md
-      - "Lesson 13：Celery 架构、Broker 与 Worker 生命周期": lessons/13-celery-architecture-worker-lifecycle.md
-      - "Lesson 14：任务幂等、重试、超时与限流": lessons/14-celery-reliability-patterns.md
-      - "Lesson 15：事务 Outbox、任务编排与补偿": lessons/15-outbox-workflow-compensation.md
-      - "Lesson 16：Celery 监控、队列堆积与排障": lessons/16-celery-observability-debugging.md
-      - "Lesson 17：WSGI、ASGI 与 Python Web Server 模型": lessons/17-wsgi-asgi-server-models.md
-      - "Lesson 18：Gunicorn 进程模型与 Worker 选择": lessons/18-gunicorn-worker-models.md
-      - "Lesson 19：Daphne、Channels 与长连接": lessons/19-daphne-channels-long-connections.md
-      - "Lesson 20：asyncio、线程、进程与 greenlet 对比": lessons/20-concurrency-models.md
-      - "Lesson 21：gevent/eventlet 与 monkey patch 边界": lessons/21-greenlet-monkey-patch-boundaries.md
-      - "Lesson 22：性能剖析、内存泄漏与阻塞定位": lessons/22-profiling-memory-blocking.md
-      - "Lesson 23：Observability、部署与 Runbook": lessons/23-observability-deployment-runbook.md
-      - "Lesson 24：综合项目 Review 与生产演练": lessons/24-final-project-review.md
+      - "Lesson 13：MySQL/InnoDB 生产实践": lessons/13-mysql-innodb-production.md
+      - "Lesson 14：Redis 基础数据结构与缓存边界": lessons/14-redis-cache-boundaries.md
+      - "Lesson 15：Redis Stream 与轻量事件流": lessons/15-redis-stream-event-flow.md
+      - "Lesson 16：MongoDB 文档模型与聚合查询": lessons/16-mongodb-document-aggregation.md
+      - "Lesson 17：Celery 架构、Broker 与 Worker 生命周期": lessons/17-celery-architecture-worker-lifecycle.md
+      - "Lesson 18：任务幂等、重试、超时与限流": lessons/18-celery-reliability-patterns.md
+      - "Lesson 19：事务 Outbox、任务编排与补偿": lessons/19-outbox-workflow-compensation.md
+      - "Lesson 20：Celery 监控、队列堆积与排障": lessons/20-celery-observability-debugging.md
+      - "Lesson 21：Kafka 事件系统与 Python Consumer": lessons/21-kafka-event-system-python-consumer.md
+      - "Lesson 22：Kafka 与业务一致性：Outbox、CDC、幂等消费": lessons/22-kafka-outbox-cdc-idempotency.md
+      - "Lesson 23：WSGI、ASGI 与 Python Web Server 模型": lessons/23-wsgi-asgi-server-models.md
+      - "Lesson 24：Gunicorn 进程模型与 Worker 选择": lessons/24-gunicorn-worker-models.md
+      - "Lesson 25：Daphne、Channels 与长连接": lessons/25-daphne-channels-long-connections.md
+      - "Lesson 26：asyncio、线程、进程与 greenlet 对比": lessons/26-concurrency-models.md
+      - "Lesson 27：gevent/eventlet 与 monkey patch 边界": lessons/27-greenlet-monkey-patch-boundaries.md
+      - "Lesson 28：性能剖析、内存泄漏与阻塞定位": lessons/28-profiling-memory-blocking.md
+      - "Lesson 29：Observability、部署与 Runbook": lessons/29-observability-deployment-runbook.md
+      - "Lesson 30：综合项目 Review 与生产演练": lessons/30-final-project-review.md
   - 实验:
       - 实验说明: labs/index.md
   - 综合项目:

@@ -1,4 +1,4 @@
-# Lesson 20：asyncio、线程、进程与 greenlet 对比
+# Lesson 15：Redis Stream 与轻量事件流
 
 ## 学习目标
 
@@ -29,4 +29,4 @@ python manage.py check --deploy
 
 ## 故障证据
 
-待补充：日志、SQL、profile、queue metrics 或 server worker 状态。
+待补充：日志、SQL、profile、queue metrics、consumer lag 或 server worker 状态。

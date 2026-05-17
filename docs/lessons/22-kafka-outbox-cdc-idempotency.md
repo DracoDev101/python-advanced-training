@@ -1,4 +1,4 @@
-# Lesson 22：性能剖析、内存泄漏与阻塞定位
+# Lesson 22：Kafka 与业务一致性：Outbox、CDC、幂等消费
 
 ## 学习目标
 
@@ -29,4 +29,4 @@ python manage.py check --deploy
 
 ## 故障证据
 
-待补充：日志、SQL、profile、queue metrics 或 server worker 状态。
+待补充：日志、SQL、profile、queue metrics、consumer lag 或 server worker 状态。

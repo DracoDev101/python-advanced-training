@@ -7,9 +7,11 @@
 ## 覆盖能力
 
 - Django REST API 与权限
-- PostgreSQL transaction、row lock、migration
-- Redis cache 与 Channels channel layer
+- MySQL/PostgreSQL transaction、row lock、migration
+- Redis cache、Redis Stream 与 Channels channel layer
+- MongoDB 文档读模型与聚合查询
 - Celery 异步任务、幂等、重试、outbox、补偿
+- Kafka 事件发布、consumer group、DLQ、replay
 - Gunicorn + Daphne 分离部署
 - observability：logs、metrics、traces
 - 故障演练：慢 SQL、队列堆积、worker crash、WebSocket 断连
@@ -33,7 +35,8 @@ POST /orders
 → transaction.on_commit 写 outbox / 投递 Celery
 → reserve inventory
 → payment callback
-→ publish order status event
+→ publish order status event to Redis Stream / Kafka
+→ materialize MongoDB read model
 → WebSocket 推送状态
 → failed tasks retry / compensation
 ```

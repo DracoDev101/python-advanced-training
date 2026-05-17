@@ -49,9 +49,10 @@
 ```text
 Lesson 1–4：Python 后端运行时与工程基础
 Lesson 5–12：Django 生产级项目、请求、ORM、API、测试
-Lesson 13–16：Celery 任务系统与可靠异步架构
-Lesson 17–21：WSGI/ASGI、Gunicorn、Daphne、greenlet、monkey patch
-Lesson 22–24：性能诊断、observability、部署 runbook 与综合项目
+Lesson 13–16：MySQL、Redis、Redis Stream、MongoDB 数据与查询系统
+Lesson 17–22：Celery、Kafka 与可靠异步架构
+Lesson 23–27：WSGI/ASGI、Gunicorn、Daphne、greenlet、monkey patch
+Lesson 28–30：性能诊断、observability、部署 runbook 与综合项目
 ```
 
 ### 3.1 内容比例
@@ -59,8 +60,9 @@ Lesson 22–24：性能诊断、observability、部署 runbook 与综合项目
 ```text
 Python runtime 与并发模型：25%
 Django 生产工程：35%
-Celery 与异步工作流：20%
-部署、observability 与排障：20%
+数据存储与查询系统：20%
+Celery/Kafka 与异步工作流：20%
+部署、observability 与排障：15%
 ```
 
 ### 3.2 每个主题的闭环
@@ -86,13 +88,13 @@ Celery 与异步工作流：20%
 | Week 3 | Django request/middleware、ORM | request trace、N+1 SQL evidence |
 | Week 4 | transaction/migration | 锁等待实验、零停机 migration checklist |
 | Week 5 | DRF/API、cache/file、testing | API schema、cache boundary、pytest suite |
-| Week 6 | Celery 架构与可靠任务 | worker lifecycle lab、idempotent task |
-| Week 7 | Outbox/workflow、Celery 排障 | outbox demo、queue backlog runbook |
-| Week 8 | WSGI/ASGI、Gunicorn | server matrix、worker tuning evidence |
-| Week 9 | Daphne/Channels、长连接 | websocket heartbeat/backpressure lab |
-| Week 10 | asyncio/thread/process/greenlet、monkey patch | 并发模型对比、patch 污染实验 |
-| Week 11 | profiling、observability、deployment | pprof-like Python profiling、dashboard fields |
-| Week 12 | 综合项目 Review | Production Order Workflow 演练报告 |
+| Week 6 | MySQL、Redis 基础 | slow query/lock 证据、cache boundary lab |
+| Week 7 | Redis Stream、MongoDB | stream consumer group、Mongo 聚合查询实验 |
+| Week 8 | Celery 架构与可靠任务 | worker lifecycle lab、idempotent task |
+| Week 9 | Outbox/workflow、Kafka | outbox demo、Kafka consumer lag runbook |
+| Week 10 | WSGI/ASGI、Gunicorn、Daphne | server matrix、worker tuning、WebSocket backpressure |
+| Week 11 | asyncio/thread/process/greenlet、monkey patch | 并发模型对比、patch 污染实验 |
+| Week 12 | profiling、observability、deployment、综合 Review | Production Order Workflow 演练报告 |
 
 ---
 

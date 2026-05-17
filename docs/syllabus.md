@@ -88,16 +88,50 @@
 - service 层单测 vs API 集成测试
 - Celery eager mode 的误区
 
-## 模块三：Celery 任务系统与可靠异步架构
+## 模块三：数据存储与查询系统
 
-### Lesson 13：Celery 架构、Broker 与 Worker 生命周期
+### Lesson 13：MySQL/InnoDB 生产实践
+
+- MySQL 与 PostgreSQL 在 Django 项目中的差异
+- InnoDB clustered index、secondary index、covering index
+- transaction isolation、gap lock、next-key lock
+- slow query log、EXPLAIN、online DDL
+- Django MySQL migration 与 charset/collation 风险
+
+### Lesson 14：Redis 基础数据结构与缓存边界
+
+- string/hash/list/set/zset 使用场景
+- cache aside、read-through/write-through 边界
+- TTL jitter、缓存穿透/击穿/雪崩
+- distributed lock 的正确性边界
+- Redis memory、eviction、pipeline、Lua
+
+### Lesson 15：Redis Stream 与轻量事件流
+
+- stream、consumer group、pending entries list
+- XADD/XREADGROUP/XACK/XAUTOCLAIM
+- Redis Stream vs Celery broker vs Kafka
+- 至少一次投递、幂等消费、重放与补偿
+- 在 Django 中实现 outbox → stream → consumer
+
+### Lesson 16：MongoDB 文档模型与聚合查询
+
+- document modeling：embed vs reference
+- index、compound index、TTL index
+- aggregation pipeline
+- write concern/read concern/read preference
+- Django 生态中何时不用 ORM 强行抽象 MongoDB
+
+## 模块四：Celery、Kafka 与可靠异步架构
+
+### Lesson 17：Celery 架构、Broker 与 Worker 生命周期
 
 - broker/backend/worker/beat
 - Redis vs RabbitMQ 取舍
 - worker pool：prefork、threads、gevent、eventlet、solo
 - prefetch、acks、visibility timeout
 
-### Lesson 14：任务幂等、重试、超时与限流
+### Lesson 18：任务幂等、重试、超时与限流
 
 - task idempotency key
 - retry/backoff/jitter
@@ -105,44 +139,60 @@
 - rate limit、routing、priority queue
 - poison message 与人工补偿
 
-### Lesson 15：事务 Outbox、任务编排与补偿
+### Lesson 19：事务 Outbox、任务编排与补偿
 
 - Django transaction.on_commit 的边界
 - outbox pattern
 - chain/group/chord 的失败语义
 - saga/compensation
 
-### Lesson 16：Celery 监控、队列堆积与排障
+### Lesson 20：Celery 监控、队列堆积与排障
 
 - inspect active/reserved/scheduled
 - events、Flower、Prometheus exporter
 - queue latency、task runtime、failure rate
 - worker lost、OOM、broker reconnect
 
-## 模块四：WSGI/ASGI、Server 与并发模型
+### Lesson 21：Kafka 事件系统与 Python Consumer
 
-### Lesson 17：WSGI、ASGI 与 Python Web Server 模型
+- topic、partition、offset、consumer group
+- ordering、rebalance、commit offset
+- at-least-once、exactly-once 的现实边界
+- schema registry、Avro/Protobuf/JSON 取舍
+- aiokafka/confluent-kafka 在 Django 服务中的使用边界
+
+### Lesson 22：Kafka 与业务一致性：Outbox、CDC、幂等消费
+
+- DB transaction 与消息发布的双写问题
+- transactional outbox、Debezium CDC
+- idempotent producer / consumer dedup
+- retry topic、DLQ、replay
+- consumer lag、poison message、backpressure 排障
+
+## 模块五：WSGI/ASGI、Server 与并发模型
+
+### Lesson 23：WSGI、ASGI 与 Python Web Server 模型
 
 - WSGI sync callable
 - ASGI scope/receive/send
 - Django sync/async view 边界
 - sync_to_async / async_to_sync 成本
 
-### Lesson 18：Gunicorn 进程模型与 Worker 选择
+### Lesson 24：Gunicorn 进程模型与 Worker 选择
 
 - master/worker 信号模型
 - sync/gthread/gevent/eventlet/uvicorn worker
 - timeout、graceful-timeout、max-requests
 - preload_app 与内存/连接副作用
 
-### Lesson 19：Daphne、Channels 与长连接
+### Lesson 25：Daphne、Channels 与长连接
 
 - Daphne 在 ASGI 栈中的定位
 - Channels、channel layer、Redis
 - WebSocket heartbeat、backpressure
 - 长连接部署与水平扩展
 
-### Lesson 20：asyncio、线程、进程与 greenlet 对比
+### Lesson 26：asyncio、线程、进程与 greenlet 对比
 
 - cooperative vs preemptive scheduling
 - CPU-bound vs I/O-bound
@@ -150,7 +200,7 @@
 - asyncio cancellation 与 timeout
 - greenlet context switch 模型
 
-### Lesson 21：gevent/eventlet 与 monkey patch 边界
+### Lesson 27：gevent/eventlet 与 monkey patch 边界
 
 - monkey.patch_all 改了什么
 - socket/ssl/thread/time/select/subprocess 影响面
@@ -158,27 +208,27 @@
 - Django/Celery/Gunicorn gevent worker 风险
 - 如何检测阻塞和 patch 污染
 
-## 模块五：诊断、部署与综合项目
+## 模块六：诊断、部署与综合项目
 
-### Lesson 22：性能剖析、内存泄漏与阻塞定位
+### Lesson 28：性能剖析、内存泄漏与阻塞定位
 
 - pyinstrument、cProfile、scalene
 - tracemalloc、memray
 - py-spy、strace、lsof
 - slow SQL、lock wait、connection pool exhaustion
 
-### Lesson 23：Observability、部署与 Runbook
+### Lesson 29：Observability、部署与 Runbook
 
-- structured logging、request id、task id
-- metrics：latency、error、queue depth、DB pool
-- tracing：HTTP → DB → Celery
+- structured logging、request id、task id、event id
+- metrics：latency、error、queue depth、DB pool、consumer lag
+- tracing：HTTP → DB → Celery/Kafka → Redis Stream
 - docker compose、systemd、Kubernetes 基础部署策略
 - runbook：症状 → 证据 → 命令 → 修复 → 验证
 
-### Lesson 24：综合项目 Review 与生产演练
+### Lesson 30：综合项目 Review 与生产演练
 
 - 架构 review
 - 可靠性 review
 - 性能压测
-- 故障注入：慢 SQL、队列堆积、worker OOM、WebSocket 断连
+- 故障注入：慢 SQL、Redis 热 key、MongoDB 慢聚合、Kafka lag、队列堆积、worker OOM、WebSocket 断连
 - 发布与回滚演练

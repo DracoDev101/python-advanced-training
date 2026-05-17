@@ -1,4 +1,4 @@
-# Lesson 14：任务幂等、重试、超时与限流
+# Lesson 21：Kafka 事件系统与 Python Consumer
 
 ## 学习目标
 
@@ -29,4 +29,4 @@ python manage.py check --deploy
 
 ## 故障证据
 
-待补充：日志、SQL、profile、queue metrics 或 server worker 状态。
+待补充：日志、SQL、profile、queue metrics、consumer lag 或 server worker 状态。

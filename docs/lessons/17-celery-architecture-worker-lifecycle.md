@@ -1,4 +1,4 @@
-# Lesson 21：gevent/eventlet 与 monkey patch 边界
+# Lesson 17：Celery 架构、Broker 与 Worker 生命周期
 
 ## 学习目标
 
@@ -29,4 +29,4 @@ python manage.py check --deploy
 
 ## 故障证据
 
-待补充：日志、SQL、profile、queue metrics 或 server worker 状态。
+待补充：日志、SQL、profile、queue metrics、consumer lag 或 server worker 状态。

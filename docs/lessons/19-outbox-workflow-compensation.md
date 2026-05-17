@@ -1,4 +1,4 @@
-# Lesson 19：Daphne、Channels 与长连接
+# Lesson 19：事务 Outbox、任务编排与补偿
 
 ## 学习目标
 
@@ -29,4 +29,4 @@ python manage.py check --deploy
 
 ## 故障证据
 
-待补充：日志、SQL、profile、queue metrics 或 server worker 状态。
+待补充：日志、SQL、profile、queue metrics、consumer lag 或 server worker 状态。

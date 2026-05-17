@@ -1,4 +1,4 @@
-# Lesson 4：import、配置与项目启动链路
+# Lesson 25：Daphne、Channels 与长连接
 
 ## 学习目标
 

@@ -1,4 +1,4 @@
-# Lesson 13：Celery 架构、Broker 与 Worker 生命周期
+# Lesson 14：Redis 基础数据结构与缓存边界
 
 ## 学习目标
 
@@ -29,4 +29,4 @@ python manage.py check --deploy
 
 ## 故障证据
 
-待补充：日志、SQL、profile、queue metrics 或 server worker 状态。
+待补充：日志、SQL、profile、queue metrics、consumer lag 或 server worker 状态。
