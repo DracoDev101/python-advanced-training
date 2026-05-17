@@ -2,31 +2,114 @@
 
 ## 学习目标
 
-- 理解本课主题背后的运行机制。
-- 能用最小实验观察关键证据。
-- 能说明该机制在生产 Django/Celery 系统中的边界与风险。
+- 理解 monkey patch 修改了哪些标准库对象。
+- 能解释 patch 时机为什么必须早于导入 I/O 库。
+- 能审计 Django/Celery/Gunicorn gevent/eventlet 模式的兼容性。
+- 能检测阻塞调用、patch 污染和隐藏的生产风险。
 
-## 关键问题
+## 1. monkey patch 做了什么
 
-- 这个机制解决什么问题？
-- 它在哪些情况下会成为性能或可靠性瓶颈？
-- 出问题时第一证据应该从哪里拿？
-
-## 核心结论
-
-本课后续会展开完整讲义。编写时必须包含：机制解释、代码实验、生产配置、故障证据、工具验证与作业。
-
-## 最小实验
-
-```bash
-python -m pytest
-python manage.py check --deploy
+```python
+from gevent import monkey
+monkey.patch_all()
 ```
 
-## 生产实践
+常见被替换模块：
 
-待补充：结合综合项目 `Production Order Workflow` 给出可运行示例。
+```text
+socket, ssl, select, time, threading, subprocess, os, signal
+```
 
-## 故障证据
+目标是让传统阻塞 I/O 在等待时 yield 给 event loop。
 
-待补充：日志、SQL、profile、queue metrics、consumer lag 或 server worker 状态。
+## 2. patch 时机
+
+必须在导入 requests、redis、pymysql、boto3 等 I/O 库之前 patch：
+
+```python
+# gunicorn_conf.py or very early entrypoint
+from gevent import monkey
+monkey.patch_all()
+
+from myapp import create_app
+```
+
+如果先导入库再 patch，库内部可能已经缓存原始 socket/select，导致部分调用仍阻塞整个进程。
+
+## 3. Gunicorn gevent worker
+
+```bash
+gunicorn config.wsgi:application \
+  --worker-class gevent \
+  --workers 4 \
+  --worker-connections 1000
+```
+
+适合大量 I/O 等待。风险：
+
+- CPU-bound task 阻塞整个 worker 里的 greenlet。
+- 未 patch 或不可 patch 的 C 扩展阻塞。
+- Django ORM/DB driver 连接池与 greenlet 局部状态需验证。
+
+## 4. Celery gevent/eventlet pool
+
+```bash
+celery -A config worker -P gevent -c 100
+```
+
+仅适合 I/O-bound task。不要用于 CPU-bound 或大量本地计算。Celery 的 soft time limit 在非 prefork 池中支持差异明显，必须验证版本与行为。
+
+## 5. 检测 patch 状态
+
+```python
+from gevent import monkey
+print(monkey.is_module_patched("socket"))
+print(monkey.is_object_patched("socket", "socket"))
+```
+
+检测阻塞：
+
+```bash
+python -m py_spy top --pid <pid>
+strace -f -p <pid> -e trace=network,select,poll,epoll_wait
+```
+
+如果 py-spy 显示某 greenlet 长时间卡在 CPU frame，gevent 无法帮忙。
+
+## 6. context/local 问题
+
+线程本地变量、request context、连接复用在 greenlet 下可能语义变化。要验证：
+
+- request_id 是否串线。
+- DB connection 是否被错误共享。
+- logging contextvars 是否跨请求污染。
+
+## 7. 反模式
+
+| 反模式 | 后果 |
+|---|---|
+| 在 Django settings 中间才 patch | 部分库未 patch，延迟随机卡死 |
+| gevent worker 里跑 CPU-heavy endpoint | 同 worker 所有 greenlet 饥饿 |
+| Celery gevent pool 处理大 PDF | 任务互相阻塞，time limit 行为异常 |
+| patch 后依赖 thread local 语义 | request context 串线 |
+
+## 8. Runbook：gevent 服务偶发全进程卡住
+
+```text
+1. py-spy dump：看是否单个 CPU frame 占住
+2. strace：是否卡未 patch 的 blocking syscall
+3. gevent hub latency 指标
+4. 检查 patch 时机和导入顺序
+5. 隔离 CPU-heavy 路由或改 sync/prefork
+6. 验证 hub latency、p95、worker timeout
+```
+
+## 作业
+
+审计一个 Django 项目是否适合 gevent：列出 I/O 库、导入顺序、CPU-heavy 路由、DB driver、request context、测试方案与回滚方案。
+
+## 评估标准
+
+- 能说清 patch 的影响面和时机。
+- 能给出 gevent/eventlet 的适用/禁用条件。
+- 能用工具找出阻塞 greenlet 的证据。

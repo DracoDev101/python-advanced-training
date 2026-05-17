@@ -2,31 +2,116 @@
 
 ## 学习目标
 
-- 理解本课主题背后的运行机制。
-- 能用最小实验观察关键证据。
-- 能说明该机制在生产 Django/Celery 系统中的边界与风险。
+- 能区分 CPU 慢、I/O 慢、锁等待、队列等待、内存泄漏。
+- 能使用 py-spy、pyinstrument、cProfile、tracemalloc、memray、strace、lsof。
+- 能设计低风险生产采样策略。
+- 能把性能问题转化为可验证的修复假设。
 
-## 关键问题
+## 1. 证据分类
 
-- 这个机制解决什么问题？
-- 它在哪些情况下会成为性能或可靠性瓶颈？
-- 出问题时第一证据应该从哪里拿？
-
-## 核心结论
-
-本课后续会展开完整讲义。编写时必须包含：机制解释、代码实验、生产配置、故障证据、工具验证与作业。
-
-## 最小实验
-
-```bash
-python -m pytest
-python manage.py check --deploy
+```text
+CPU: py-spy/scalene/cProfile
+Python heap: tracemalloc/objgraph/memray
+Native/RSS: smaps/memray/container metrics
+I/O syscall: strace/lsof/ss
+DB: slow query log/EXPLAIN/lock wait
+Queue: Celery/Kafka/Redis Stream lag
 ```
 
-## 生产实践
+先分类，再优化。
 
-待补充：结合综合项目 `Production Order Workflow` 给出可运行示例。
+## 2. py-spy 生产采样
 
-## 故障证据
+无需改代码：
 
-待补充：日志、SQL、profile、queue metrics、consumer lag 或 server worker 状态。
+```bash
+py-spy top --pid <pid>
+py-spy record -o profile.svg --pid <pid> --duration 30
+py-spy dump --pid <pid>
+```
+
+适合定位 CPU 热点、阻塞栈、线程状态。注意权限与容器 ptrace 限制。
+
+## 3. pyinstrument 请求级剖析
+
+适合开发/预发：
+
+```python
+from pyinstrument import Profiler
+profiler = Profiler()
+profiler.start()
+# call view/service
+profiler.stop()
+print(profiler.output_text(unicode=True, color=True))
+```
+
+能看到时间花在哪些调用层级。
+
+## 4. tracemalloc
+
+```python
+import tracemalloc
+tracemalloc.start(25)
+snap1 = tracemalloc.take_snapshot()
+# run workload
+snap2 = tracemalloc.take_snapshot()
+for stat in snap2.compare_to(snap1, 'lineno')[:20]:
+    print(stat)
+```
+
+适合 Python heap 增长；不解释 native extension 或 allocator RSS 不回收。
+
+## 5. memray
+
+适合深度内存分析：
+
+```bash
+python -m memray run -o out.bin manage.py reproduce_leak
+python -m memray flamegraph out.bin
+```
+
+可以看到 native allocation。
+
+## 6. strace/lsof/ss
+
+```bash
+strace -f -p <pid> -tt -T -e trace=network,select,poll,epoll_wait
+lsof -p <pid> | grep TCP
+ss -tanp | grep python
+```
+
+用于判断进程是否卡在 socket、DNS、文件、pipe。
+
+## 7. 内存泄漏 runbook
+
+```text
+1. 确认 RSS 曲线：持续增长还是平台阶梯
+2. 对比 Python heap：tracemalloc snapshot
+3. 对比对象数：objgraph / gc.get_objects
+4. 看 native：memray / smaps
+5. 查缓存、全局 list、LRU 无上限、闭包引用、signals 重复注册
+6. 加 max_requests 只做止血
+7. 修复后用同一压测 workload 对比增长斜率
+```
+
+## 8. 阻塞定位 runbook
+
+```text
+症状：请求 p99 高但 CPU 不高
+1. py-spy dump 看线程卡在哪
+2. strace 看 syscall duration
+3. DB slow query / lock waits
+4. Redis slowlog / network latency
+5. HTTP client timeout/retry
+6. 修复后验证 p99、下游 latency、连接池等待时间
+```
+
+## 作业
+
+构造一个有内存泄漏和慢外部调用的最小 Django service，用 tracemalloc 与 py-spy 分别给出证据截图/文本，并提出修复。
+
+## 评估标准
+
+- 能按证据分类性能问题。
+- 能选择合适 profiling 工具。
+- 能避免无证据调参。

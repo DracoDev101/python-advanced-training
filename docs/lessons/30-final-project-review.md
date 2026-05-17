@@ -2,31 +2,123 @@
 
 ## 学习目标
 
-- 理解本课主题背后的运行机制。
-- 能用最小实验观察关键证据。
-- 能说明该机制在生产 Django/Celery 系统中的边界与风险。
+- 用生产评审方式整合全课程：Django、MySQL、Redis、MongoDB、Redis Stream、Celery、Kafka、WSGI/ASGI、观测与部署。
+- 能从架构、可靠性、性能、安全、运维五个维度 review 一个后端系统。
+- 能设计故障注入和恢复演练。
+- 能给出上线前 go/no-go 判断。
 
-## 关键问题
+## 1. 综合项目目标
 
-- 这个机制解决什么问题？
-- 它在哪些情况下会成为性能或可靠性瓶颈？
-- 出问题时第一证据应该从哪里拿？
+项目：`Production Order Workflow`
 
-## 核心结论
+核心链路：
 
-本课后续会展开完整讲义。编写时必须包含：机制解释、代码实验、生产配置、故障证据、工具验证与作业。
-
-## 最小实验
-
-```bash
-python -m pytest
-python manage.py check --deploy
+```text
+HTTP API 创建订单
+→ MySQL 写订单/库存/Outbox
+→ Celery publisher 发布事件
+→ Kafka/Redis Stream 事件流
+→ Consumer 更新 MongoDB read model
+→ Redis cache/session
+→ WebSocket 推送订单状态
+→ Observability + Runbook
 ```
 
-## 生产实践
+## 2. 架构 review 清单
 
-待补充：结合综合项目 `Production Order Workflow` 给出可运行示例。
+```text
+边界：API / domain service / repository / event publisher 是否清晰
+一致性：DB transaction 与消息发布是否有 outbox
+幂等：API idempotency key、task/event consumer dedup 是否完整
+数据：MySQL 索引/锁、Mongo read model、Redis key/TTL
+异步：Celery retry/time limit、Kafka commit/DLQ、Stream PEL
+Server：Gunicorn/Daphne worker 与连接池是否匹配
+```
 
-## 故障证据
+## 3. 可靠性 review
 
-待补充：日志、SQL、profile、queue metrics、consumer lag 或 server worker 状态。
+必须回答：
+
+- API 请求超时后，订单是否可能已创建？客户端如何查询？
+- Celery task 成功但 ack 丢失会不会重复副作用？
+- Kafka consumer 处理成功但 commit 失败会怎样？
+- Mongo read model 落后时 API 是否降级？
+- WebSocket 丢消息后如何恢复状态？
+
+## 4. 性能 review
+
+压测前先定义 SLO：
+
+```text
+create order p95 < 200ms
+order detail p95 < 100ms
+critical celery oldest age < 10s
+consumer lag < 1000 messages for 5m
+websocket reconnect success > 99%
+```
+
+压测证据：
+
+```bash
+hey -n 10000 -c 100 http://localhost:8000/api/orders
+py-spy record -o api.svg --pid <pid> --duration 30
+redis-cli --latency
+mysql -e 'SHOW ENGINE INNODB STATUS\G'
+```
+
+## 5. 故障注入
+
+| 故障 | 期望证据 | 期望恢复 |
+|---|---|---|
+| MySQL 慢查询 | p95 上升、slow log | 索引/查询修复 |
+| Redis 热 key | Redis CPU/latency 上升 | key 拆分/本地缓存/限流 |
+| Celery worker OOM | worker lost、queue age | max_requests/拆任务/内存修复 |
+| Kafka lag | consumer_lag 上升 | 扩容/修 poison/DLQ |
+| WebSocket 慢客户端 | send queue 上升 | backpressure/断开 |
+| 外部 API 429 | retry storm | jitter/circuit breaker |
+
+## 6. 上线 go/no-go
+
+Go 条件：
+
+- 所有 migration 可 expand/contract 或已评审锁风险。
+- 所有核心副作用有幂等键。
+- Dashboard 与告警覆盖用户影响。
+- 回滚路径已演练。
+- 数据修复脚本有 dry-run。
+
+No-go 条件：
+
+- Outbox pending 无监控。
+- Consumer 无 DLQ/replay。
+- 长连接无 heartbeat/backpressure。
+- 大表 migration 需要长时间锁表。
+- 只有成功路径测试，无故障注入。
+
+## 7. 最终交付物
+
+学生需要提交：
+
+```text
+architecture.md
+api-contract.md
+schema-and-migrations.md
+event-contract.md
+runbook.md
+load-test-report.md
+failure-drill-report.md
+```
+
+## 8. 评审问题
+
+1. 如果支付 provider 成功但响应超时，你的系统如何不重复扣款？
+2. 如果 Kafka 重放 24 小时事件，read model 是否保持正确？
+3. 如果 Redis 全部丢失，哪些能力降级，哪些必须恢复？
+4. 如果 Web worker 全部滚动重启，in-flight 请求如何处理？
+5. 如果某个 migration 发布后发现慢查询，如何回滚？
+
+## 评估标准
+
+- 能跨组件解释端到端一致性。
+- 能用证据驱动性能与可靠性判断。
+- 能给出可执行上线 checklist 与故障演练报告。

@@ -87,6 +87,14 @@ nav:
       - "Lab 20：Celery 排障": labs/20-celery-observability-debugging.md
       - "Lab 21：Kafka Consumer": labs/21-kafka-event-system-python-consumer.md
       - "Lab 22：Kafka Outbox/CDC": labs/22-kafka-outbox-cdc-idempotency.md
+      - "Lab 23：WSGI/ASGI Server 模型": labs/23-wsgi-asgi-server-models.md
+      - "Lab 24：Gunicorn Worker 模型": labs/24-gunicorn-worker-models.md
+      - "Lab 25：Daphne/Channels 长连接": labs/25-daphne-channels-long-connections.md
+      - "Lab 26：并发模型对比": labs/26-concurrency-models.md
+      - "Lab 27：greenlet 与 monkey patch": labs/27-greenlet-monkey-patch-boundaries.md
+      - "Lab 28：性能剖析与阻塞定位": labs/28-profiling-memory-blocking.md
+      - "Lab 29：Observability 与 Runbook": labs/29-observability-deployment-runbook.md
+      - "Lab 30：综合项目生产演练": labs/30-final-project-review.md
   - 综合项目:
       - Production Order Workflow: projects/production-order-workflow.md
   - 参考资料:
