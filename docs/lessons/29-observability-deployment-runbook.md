@@ -114,6 +114,115 @@ mkdocs build --strict
 - 哪个 runbook 缺失。
 - 长期修复项与 owner。
 
+## 8. Metrics cardinality：最常见的自毁点
+
+不要把高基数字段放进 metric label：
+
+| 禁止 label | 原因 |
+|---|---|
+| user_id | 用户数无限增长 |
+| order_id | 每个订单一个 time series |
+| request_id | 每个请求一个 time series |
+| exception_message | 文本无限变化 |
+| raw path `/orders/123` | path 参数爆炸 |
+
+正确做法：
+
+```text
+route=/orders/{id}
+status=2xx/4xx/5xx 或具体 status
+error_type=ProviderTimeout
+queue=critical
+```
+
+日志可以承载高基数字段，指标只承载有限维度。
+
+## 9. Histogram bucket 按 SLA 设计
+
+如果 API SLO 是 p95 < 200ms，bucket 应围绕阈值加密：
+
+```python
+HTTP_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.5, 1, 2, 5]
+```
+
+队列 age bucket：
+
+```python
+QUEUE_AGE_BUCKETS = [1, 5, 10, 30, 60, 120, 300, 600, 1800]
+```
+
+不要只用平均值。平均值会掩盖尾延迟和少数老消息。
+
+## 10. OpenTelemetry 贯通异步链路
+
+HTTP trace 自动传播到 Celery/Kafka 需要显式注入上下文：
+
+```python
+from opentelemetry.propagate import inject, extract
+
+headers = {}
+inject(headers)
+produce_event(payload, headers=headers)
+```
+
+consumer：
+
+```python
+ctx = extract(event.headers)
+with tracer.start_as_current_span("process_order_event", context=ctx):
+    process(event)
+```
+
+Celery task headers 也应携带 trace/request/event：
+
+```python
+capture_payment.apply_async(args=[payment_id], headers={"traceparent": traceparent, "request_id": request_id})
+```
+
+否则 trace 会在异步边界断开，事故中无法解释“HTTP 成功但后台为什么慢”。
+
+## 11. Canary 发布观察窗口
+
+Canary 不只是“先发 5% 流量”。必须定义观察指标与退出条件：
+
+```text
+窗口：10-30 分钟，覆盖一个业务高峰周期更好
+核心：5xx、p95/p99、DB slow query、Celery retry、Kafka lag
+对照：新旧版本同 route 同 percentile
+退出：任一核心 SLO 破坏立即 rollback
+```
+
+发布 checklist：
+
+```text
+migration 已完成 expand 阶段
+新旧版本可同时读写
+feature flag 可关闭
+rollback 不依赖 reverse destructive migration
+dashboard 已过滤 version label
+```
+
+## 12. Error budget 与告警分级
+
+告警分级：
+
+```text
+P0：用户核心路径不可用，立即唤醒
+P1：SLO 快速消耗，工作时间外也通知
+P2：容量/趋势风险，工作时间处理
+P3：优化建议，不分页
+```
+
+避免每个组件独立大喊。优先告用户影响：
+
+```text
+order_create_error_rate > 2% for 5m
+payment_confirm_lag_p95 > 60s for 10m
+critical_queue_oldest_age > 120s for 5m
+```
+
+组件指标用于定位，不一定都要分页。
+
 ## 作业
 
 为综合项目写一页生产运行手册：SLI/SLO、dashboard、告警、部署 checklist、回滚步骤、五个核心 runbook。

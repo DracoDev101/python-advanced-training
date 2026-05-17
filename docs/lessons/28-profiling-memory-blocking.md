@@ -106,6 +106,115 @@ ss -tanp | grep python
 6. 修复后验证 p99、下游 latency、连接池等待时间
 ```
 
+## 9. 如何阅读 flamegraph
+
+Flamegraph 不是“最高的函数一定有问题”。阅读顺序：
+
+```text
+宽度 = 累计采样时间
+顶部 = 调用栈叶子
+同一横向位置 = 调用父子关系
+self time 高 = 函数自身耗时
+total time 高 = 函数及子调用耗时
+```
+
+判断例子：
+
+```text
+json.dumps 很宽：序列化成本高，可能 response 太大
+pymysql read_packet 很宽：DB 等待或网络等待，不是 Python CPU
+ssl recv 很宽：外部 HTTPS 慢或无 timeout
+list comprehension 很宽：Python CPU 热点，可考虑算法/批量/缓存
+```
+
+不要只凭 profile 改代码。要把 profile 与 request route、SQL、队列、下游 latency 对齐。
+
+## 10. RSS 增长但 tracemalloc 不增长
+
+这通常说明问题不在 Python heap，可能是：
+
+- native extension 分配，例如 compression/image/crypto。
+- pymalloc arena 未归还 OS。
+- 内存碎片。
+- fork 后 copy-on-write 失效。
+- C 库缓存或连接 buffer。
+
+证据路径：
+
+```bash
+cat /proc/<pid>/status | egrep 'VmRSS|VmSize|Threads'
+cat /proc/<pid>/smaps_rollup
+pmap -x <pid> | tail -n 20
+```
+
+如果 `tracemalloc` 稳定但 RSS 持续上涨，用 memray 或 smaps，而不是继续查 Python list。
+
+## 11. preload_app 与 copy-on-write 失效
+
+Gunicorn `preload_app` 依赖 fork 后共享只读内存。如果 worker 启动后修改大量全局对象，共享页会变成私有页，RSS 上升。
+
+典型触发：
+
+```text
+全局 LRU cache 预热后继续写
+import 阶段加载大模型/大字典，worker 内再修改
+metrics registry 动态创建大量 label
+日志/trace 对象持有全局缓冲
+```
+
+证据：
+
+```bash
+smem -r -k -p $(pgrep -d, gunicorn)
+cat /proc/<pid>/smaps_rollup | egrep 'Shared|Private|Pss'
+```
+
+看 PSS 比单纯 RSS 更能反映真实内存占用。
+
+## 12. FD / connection leak
+
+连接泄漏常表现为 p99 升高、`Too many open files`、DB/Redis 连接数持续上涨。
+
+命令：
+
+```bash
+ls /proc/<pid>/fd | wc -l
+lsof -p <pid> | awk '{print $5,$8,$9}' | sort | uniq -c | sort -nr | head
+cat /proc/<pid>/limits | grep 'open files'
+ss -tanp | grep <pid> | awk '{print $1,$4,$5}' | sort | uniq -c
+```
+
+常见根因：
+
+- requests/httpx response 未关闭。
+- streaming response 中途异常未 close。
+- 每请求创建 Redis/Kafka client。
+- WebSocket disconnect 未清理 group/connection。
+- file upload 临时文件未关闭。
+
+## 13. profiling 的生产安全边界
+
+生产采样要控制风险：
+
+```text
+只采样单个 pod/worker
+限制 duration，例如 30s
+记录审批/事故号
+避免 dump 请求 body、token、PII
+确认容器具备 SYS_PTRACE 或相应权限
+采样后清理 profile 文件
+```
+
+Kubernetes 常见限制：
+
+```yaml
+securityContext:
+  capabilities:
+    add: ["SYS_PTRACE"]
+```
+
+如果不能 ptrace，退而求其次：应用内 pyinstrument、OpenTelemetry span、endpoint 级 timing middleware。
+
 ## 作业
 
 构造一个有内存泄漏和慢外部调用的最小 Django service，用 tracemalloc 与 py-spy 分别给出证据截图/文本，并提出修复。

@@ -117,6 +117,115 @@ failure-drill-report.md
 4. 如果 Web worker 全部滚动重启，in-flight 请求如何处理？
 5. 如果某个 migration 发布后发现慢查询，如何回滚？
 
+## 9. Final rubric：100 分
+
+```text
+架构边界与代码组织：15
+API 契约、权限与幂等：15
+数据一致性与事务/Outbox：20
+异步系统可靠性：15
+性能与容量证据：10
+Observability 与 Runbook：15
+故障演练与恢复：10
+```
+
+扣分项：
+
+```text
+-20：核心副作用无幂等
+-15：无 outbox 或双写失败窗口未解释
+-10：无 migration 回滚/expand-contract 策略
+-10：无 DLQ/replay 方案
+-10：压测报告只有平均值，无 p95/p99
+-10：runbook 无具体命令
+```
+
+## 10. architecture.md 模板
+
+```markdown
+# Architecture
+
+## Context
+## Components
+## Request flow
+## Data model
+## State machine
+## Event flow
+## Consistency boundaries
+## Failure modes
+## Scaling plan
+## Security and permissions
+## Observability
+```
+
+必须包含一张文本图或 Mermaid 图，展示 HTTP、MySQL、Outbox、Celery、Kafka/Redis Stream、Mongo read model、Redis cache、WebSocket。
+
+## 11. load-test-report.md 模板
+
+```markdown
+# Load Test Report
+
+## Goal
+## Environment
+## Dataset
+## Command
+## Result Summary
+- rps
+- p50/p95/p99
+- error rate
+- CPU/RSS
+- DB query p95
+- queue lag
+
+## Bottleneck Evidence
+## Fix Attempt
+## Before/After
+## Remaining Risk
+```
+
+禁止只提交 `hey` 输出。必须解释瓶颈在哪里，以及是否会影响生产 SLO。
+
+## 12. failure-drill-report.md 模板
+
+```markdown
+# Failure Drill Report
+
+## Scenario
+## Hypothesis
+## Injection Method
+## Expected Signals
+## Actual Signals
+## User Impact
+## Mitigation
+## Recovery Verification
+## Follow-up Fixes
+```
+
+至少覆盖：
+
+```text
+MySQL lock wait
+Redis latency/hot key
+Celery worker crash
+Kafka consumer lag/poison event
+WebSocket slow client/disconnect storm
+```
+
+## 13. Go/No-Go meeting agenda
+
+```text
+1. 本次发布范围
+2. schema/migration 风险
+3. 新旧版本兼容性
+4. 幂等与补偿路径
+5. dashboard/alert 是否就绪
+6. rollback 条件与负责人
+7. 数据修复脚本 dry-run 结果
+8. go/no-go 决策
+```
+
+No-go 的价值在于提前阻止不可恢复风险，不是证明团队失败。
+
 ## 评估标准
 
 - 能跨组件解释端到端一致性。

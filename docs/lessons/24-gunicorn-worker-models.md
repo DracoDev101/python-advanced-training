@@ -129,6 +129,113 @@ Kubernetes 还需要 `terminationGracePeriodSeconds` 大于 graceful-timeout。
 7. 验证：502/504、p95、worker restart rate 回落
 ```
 
+## 8. worker 数估算：不要只背公式
+
+常见公式 `(2 × CPU) + 1` 只能作为起点。生产估算要看 workload：
+
+```text
+required_concurrency ≈ arrival_rate_rps × p95_service_time_seconds
+```
+
+例如：
+
+```text
+200 rps × 0.12s = 24 in-flight requests
+```
+
+如果 sync worker 每个进程一次处理一个请求，需要至少 24 个并发槽位，通常通过多 replicas × workers 提供；如果 gthread 每 worker 8 线程，要同时计算 DB 连接数：
+
+```text
+replicas × workers × threads ≤ DB max_connections 安全阈值
+```
+
+阻塞比例越高，线程/greenlet 越可能有收益；CPU 比例越高，多线程越不解决 GIL 竞争。
+
+## 9. backlog、keep-alive 与 upstream 排队
+
+请求可能还没进入 Django 就已经在排队：
+
+```text
+client → nginx accept queue → upstream keepalive pool → gunicorn listen backlog → worker accept
+```
+
+证据：
+
+```bash
+ss -lntp 'sport = :8000'
+ss -tan state established '( sport = :8000 )' | wc -l
+netstat -s | grep -i listen
+```
+
+Gunicorn 参数：
+
+```bash
+--backlog 2048
+--keep-alive 2
+```
+
+如果 nginx 已经负责 client keep-alive，Gunicorn keep-alive 不应过长，否则空闲连接占用 worker/connection 资源。
+
+## 10. graceful reload 时间线
+
+```text
+T0: load balancer 停止向旧 pod/instance 分配新流量
+T1: master 收到 TERM/HUP
+T2: worker 停止 accept 新请求
+T3: in-flight requests 在 graceful-timeout 内完成
+T4: worker 关闭 DB/Redis 连接并退出
+T5: 新版本 ready 后接流量
+```
+
+Kubernetes 中：
+
+```yaml
+terminationGracePeriodSeconds: 45
+readinessProbe:
+  httpGet:
+    path: /health/ready
+preStop:
+  exec:
+    command: ["/bin/sh", "-c", "sleep 5"]
+```
+
+`terminationGracePeriodSeconds` 必须大于 Gunicorn `graceful-timeout`，否则 kubelet 会先 SIGKILL。
+
+## 11. access log 字段
+
+建议 access log 至少包含：
+
+```text
+request_id method path status duration_ms bytes user_agent upstream_addr worker_pid
+```
+
+Gunicorn 示例：
+
+```bash
+--access-logformat '%({x-request-id}i)s %(m)s %(U)s %(s)s %(D)s %(b)s %(p)s'
+```
+
+排障时用它回答：
+
+- 是所有路由慢，还是某个路由慢？
+- 慢请求集中在哪个 worker/pod？
+- 499/504 是否与 deploy 或 worker timeout 对齐？
+
+## 12. worker_tmp_dir 与容器环境
+
+某些 worker heartbeat 或临时文件操作会触及文件系统。容器中如果 `/tmp` 或 overlayfs 抖动，会放大 latency。常见配置：
+
+```bash
+--worker-tmp-dir /dev/shm
+```
+
+验证：
+
+```bash
+df -h /tmp /dev/shm
+iostat -xz 1
+```
+
 ## 作业
 
 为三个服务选择 Gunicorn worker：支付 API、报表生成 API、只读查询 API。说明 worker class、数量估算、timeout、max_requests、preload 是否开启和证据指标。

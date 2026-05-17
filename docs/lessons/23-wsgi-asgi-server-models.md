@@ -124,6 +124,122 @@ async def order_detail(request, order_id):
 6. 修复后验证 p95、event loop lag、worker RSS 回落
 ```
 
+## 9. Django ASGIHandler / WSGIHandler 对照
+
+Django 并不是因为入口换成 ASGI 就变成“全异步框架”。两个入口的差异更像：协议适配层不同，内部仍要根据 view/middleware 能力决定 sync/async 路径。
+
+```text
+WSGIHandler
+  __call__(environ, start_response)
+  → request = WSGIRequest(environ)
+  → get_response(request)
+  → response iterable
+
+ASGIHandler
+  async __call__(scope, receive, send)
+  → read body events
+  → request = ASGIRequest(scope, body_file)
+  → await get_response_async(request)
+  → send response start/body events
+```
+
+在 ASGI 模式下，如果 middleware 是同步的，Django 需要做适配：
+
+```text
+async server
+→ sync middleware bridge
+→ sync view / ORM
+→ async bridge back to server
+```
+
+所以“有一个 async view”不等于整条链路无阻塞。评估 ASGI 收益时要统计：
+
+```text
+sync middleware count
+sync_to_async call count
+sync_to_async wait time
+DB query time
+event loop lag
+threadpool queue wait
+```
+
+## 10. thread_sensitive 为什么会串行化
+
+`sync_to_async(fn, thread_sensitive=True)` 的目标是保护依赖线程局部状态或线程不安全连接的同步代码。代价是同一上下文中的这类调用可能被排到专用线程串行执行。
+
+典型风险：
+
+```python
+async def dashboard(request):
+    # 每个函数内部都走同步 ORM
+    a = await sync_to_async(load_orders, thread_sensitive=True)()
+    b = await sync_to_async(load_payments, thread_sensitive=True)()
+    c = await sync_to_async(load_notifications, thread_sensitive=True)()
+```
+
+如果高并发请求都排到少量 thread-sensitive 执行器，症状会像“event loop 没阻塞，但 p95 变高”。证据不是 CPU，而是 bridge wait time 与 DB connection wait。
+
+最小探针：
+
+```python
+import time
+from asgiref.sync import sync_to_async
+
+async def measured_sync_call(name, fn, *args):
+    start = time.perf_counter()
+    result = await sync_to_async(fn, thread_sensitive=True)(*args)
+    duration_ms = (time.perf_counter() - start) * 1000
+    logger.info("sync_bridge_call", extra={"name": name, "duration_ms": duration_ms})
+    return result
+```
+
+## 11. event loop lag 探针
+
+ASGI 服务要监控 event loop 是否被阻塞：
+
+```python
+import asyncio, time, logging
+
+async def loop_lag_probe(interval=0.5):
+    expected = time.perf_counter() + interval
+    while True:
+        await asyncio.sleep(interval)
+        now = time.perf_counter()
+        lag_ms = max(0, now - expected) * 1000
+        logging.info("event_loop_lag", extra={"lag_ms": lag_ms})
+        expected = now + interval
+```
+
+判断：
+
+```text
+lag 低、p95 高：多半是下游 I/O、threadpool/DB pool 排队
+lag 高、CPU 高：event loop 内有 CPU-bound 或阻塞同步调用
+lag 高、CPU 低：可能是 blocking syscall、DNS、未 await 的同步 SDK
+```
+
+## 12. ASGI lifespan 与连接池初始化
+
+ASGI lifespan 适合初始化异步资源：
+
+```text
+startup: create async HTTP/Redis/Kafka clients
+shutdown: flush metrics, close clients, drain in-flight tasks
+```
+
+不要在 import 阶段创建连接池。原因：
+
+- Gunicorn/Uvicorn 多 worker fork 时连接可能被继承。
+- 测试环境 import 会产生外部连接副作用。
+- reload 时旧连接没有明确关闭。
+
+生产验证：
+
+```bash
+lsof -p <worker_pid> | grep TCP
+ss -tanp | grep python
+```
+
 ## 作业
 
 给一个 Django 订单服务设计两种部署：纯 WSGI 与 ASGI+Channels。列出适用接口、worker 数、连接池、超时、观测指标和回滚策略。
