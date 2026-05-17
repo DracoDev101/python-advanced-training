@@ -1,0 +1,66 @@
+site_name: Python / Django 生产级后端系统训练营
+site_description: Python 运行时、Django、Celery、Daphne、Gunicorn、greenlet 与 monkey patch 的生产级后端训练资料
+repo_url: https://github.com/DracoDev101/python-advanced-training
+repo_name: DracoDev101/python-advanced-training
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - tables
+  - fenced_code
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.details
+
+nav:
+  - 首页: index.md
+  - 课程设计: course-design.md
+  - 课程大纲: syllabus.md
+  - 课程:
+      - "Lesson 1：Python 后端工程观与运行时地图": lessons/01-python-backend-runtime-map.md
+      - "Lesson 2：对象模型、引用与内存证据": lessons/02-object-model-memory.md
+      - "Lesson 3：类型系统、契约与工程边界": lessons/03-typing-contracts.md
+      - "Lesson 4：import、配置与项目启动链路": lessons/04-import-settings-startup.md
+      - "Lesson 5：Django 项目结构与 settings 分层": lessons/05-django-project-structure-settings.md
+      - "Lesson 6：请求生命周期、middleware 与异常链路": lessons/06-django-request-middleware.md
+      - "Lesson 7：ORM 查询、N+1 与 SQL 证据": lessons/07-django-orm-query-performance.md
+      - "Lesson 8：事务、锁与一致性边界": lessons/08-django-transactions-locks.md
+      - "Lesson 9：Migration、数据演进与发布风险": lessons/09-django-migrations-release-risk.md
+      - "Lesson 10：DRF/API 设计、认证与权限": lessons/10-drf-api-auth-permissions.md
+      - "Lesson 11：缓存、Session、文件与外部资源": lessons/11-cache-session-files.md
+      - "Lesson 12：测试体系、factory、fixtures 与契约测试": lessons/12-testing-strategy.md
+      - "Lesson 13：Celery 架构、Broker 与 Worker 生命周期": lessons/13-celery-architecture-worker-lifecycle.md
+      - "Lesson 14：任务幂等、重试、超时与限流": lessons/14-celery-reliability-patterns.md
+      - "Lesson 15：事务 Outbox、任务编排与补偿": lessons/15-outbox-workflow-compensation.md
+      - "Lesson 16：Celery 监控、队列堆积与排障": lessons/16-celery-observability-debugging.md
+      - "Lesson 17：WSGI、ASGI 与 Python Web Server 模型": lessons/17-wsgi-asgi-server-models.md
+      - "Lesson 18：Gunicorn 进程模型与 Worker 选择": lessons/18-gunicorn-worker-models.md
+      - "Lesson 19：Daphne、Channels 与长连接": lessons/19-daphne-channels-long-connections.md
+      - "Lesson 20：asyncio、线程、进程与 greenlet 对比": lessons/20-concurrency-models.md
+      - "Lesson 21：gevent/eventlet 与 monkey patch 边界": lessons/21-greenlet-monkey-patch-boundaries.md
+      - "Lesson 22：性能剖析、内存泄漏与阻塞定位": lessons/22-profiling-memory-blocking.md
+      - "Lesson 23：Observability、部署与 Runbook": lessons/23-observability-deployment-runbook.md
+      - "Lesson 24：综合项目 Review 与生产演练": lessons/24-final-project-review.md
+  - 实验:
+      - 实验说明: labs/index.md
+  - 综合项目:
+      - Production Order Workflow: projects/production-order-workflow.md
+  - 参考资料:
+      - 阅读清单: references/reading-list.md
+      - 生产排障手册: references/troubleshooting-playbook.md
